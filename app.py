@@ -6,6 +6,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import io
 import time
+import base64
+
+# === Inisialisasi session state ===
+if 'history' not in st.session_state:
+    st.session_state['history'] = []
 
 # === Model Loader ===
 @st.cache_resource
@@ -45,7 +50,6 @@ def detect_objects(image: Image.Image, prompt: str, model_option: str):
             text_threshold=0.3,
             target_sizes=[image.size[::-1]]
         )
-        # Grounding DINO hasilnya sudah punya label dari processor
         return results[0]
     else:
         results = processor.post_process_object_detection(
@@ -53,7 +57,6 @@ def detect_objects(image: Image.Image, prompt: str, model_option: str):
             threshold=0.3,
             target_sizes=[image.size[::-1]]
         )
-        # OWLv2: Perlu ambil label dari inputs.input_ids dan decode
         labels = [label.strip() for label in prompt.split('.') if label.strip()]
         boxes = results[0]["boxes"]
         scores = results[0]["scores"]
@@ -61,8 +64,7 @@ def detect_objects(image: Image.Image, prompt: str, model_option: str):
 
         return {"boxes": boxes, "labels": pred_labels, "scores": scores}
 
-
-# === Visualisasi ===
+# === Visualisasi dan Buffering ===
 def draw_boxes(image: Image.Image, boxes, labels, scores):
     fig, ax = plt.subplots(1)
     ax.imshow(image)
@@ -79,19 +81,22 @@ def draw_boxes(image: Image.Image, boxes, labels, scores):
     buf.seek(0)
     return buf
 
+def image_to_base64(buf):
+    return base64.b64encode(buf.getvalue()).decode()
+
 # === UI Streamlit ===
 st.title("Zero-Shot Object Detection")
 
 model_option = st.selectbox("Pilih Model", ["Grounding DINO", "OWL-V2"])
-uploaded_file = st.file_uploader("Upload Gambar", type=["jpg", "jpeg", "png"])
-
-st.divider()
-
 
 if model_option == "Grounding DINO":
     prompt = st.text_input("Masukkan Prompt (a dog. a person. blue shirt)", placeholder="Akhiri dengan tanda titik pada setiap prompt.")
 else:
     prompt = st.text_input("Masukkan Prompt (a dog, a person, blue shirt)", placeholder="Pisahkan dengan koma untuk setiap prompt")
+
+uploaded_file = st.file_uploader("Upload Gambar", type=["jpg", "jpeg", "png"])
+
+st.divider()
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
@@ -99,21 +104,51 @@ if uploaded_file is not None:
 
     st.divider()
 
-    with st.spinner("Mendeteksi objek...", show_time=True):
-        result = detect_objects(image, prompt, model_option)
-        boxes = result['boxes'].tolist()
-        labels = result['labels']
-        scores = result['scores'].tolist()
-        st.success("Deteksi selesai!")
+    if prompt.strip():
+        if st.button("Deteksi Objek"):
+            with st.spinner("Mendeteksi objek...", show_time=True):
+                start_time = time.time()
+                result = detect_objects(image, prompt, model_option)
+                end_time = time.time()
+                duration = end_time - start_time
 
-        col1, col2 = st.columns(2)
+                boxes = result['boxes'].tolist()
+                labels = result['labels']
+                scores = result['scores'].tolist()
 
-        with col1:
-            st.header("Hasil Deteksi")
-            img_buf = draw_boxes(image, boxes, labels, scores)
-            st.image(img_buf, caption="Hasil Deteksi", use_container_width=True)
+                st.success(f"Deteksi selesai dalam {duration:.2f} detik!")
 
-        with col2:
-            st.header("Label Terdeteksi")
-            for label, score in zip(labels, scores):
-                st.markdown(f"- **{label}** ({score:.2f})")
+                img_buf = draw_boxes(image, boxes, labels, scores)
+                st.image(img_buf, caption="Hasil Deteksi", use_container_width=True)
+
+                st.header("Label Terdeteksi")
+                for label, score in zip(labels, scores):
+                    st.markdown(f"- **{label}** ({score:.2f})")
+
+                st.text(f"Prompt: {prompt}")
+
+                # Simpan ke history (maksimal 10 item)
+                st.session_state['history'].insert(0, {
+                    "prompt": prompt,
+                    "model": model_option,
+                    "duration": duration,
+                    "labels": list(zip(labels, scores)),
+                    "image_b64": image_to_base64(img_buf)
+                })
+                st.session_state['history'] = st.session_state['history'][:10]
+    else:
+        st.warning("Masukkan prompt terlebih dahulu sebelum mendeteksi.")
+
+# === Sidebar History ===
+with st.sidebar:
+    st.header("Riwayat Prediksi")
+    if st.session_state['history']:
+        for i, entry in enumerate(st.session_state['history']):
+            with st.expander(f"Prediksi #{i+1} ({entry['model']})"):
+                st.markdown(f"**Prompt**: {entry['prompt']}")
+                st.markdown(f"**Durasi**: {entry['duration']:.2f} detik")
+                for lbl, sc in entry['labels']:
+                    st.markdown(f"- {lbl} ({sc:.2f})")
+                st.image(f"data:image/png;base64,{entry['image_b64']}", use_container_width=True)
+    else:
+        st.info("Belum ada prediksi yang dilakukan.")
