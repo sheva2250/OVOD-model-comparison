@@ -85,10 +85,6 @@ def image_to_base64(buf):
     return base64.b64encode(buf.getvalue()).decode()
 
 # === UI Streamlit ===
-st.markdown("Nama: Sheva Aqila Ramadhan - 2304130083")
-st.markdown("Dikerjakan oleh saya sendiri dan 10% AI")
-
-st.divider()
 
 st.title("Zero-Shot Object Detection")
 
